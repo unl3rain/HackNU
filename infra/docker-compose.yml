@@ -1,0 +1,83 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: smartbot
+      POSTGRES_USER: smartbot
+      POSTGRES_PASSWORD: smartbot
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"  # change host port to avoid conflicts with local Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    environment:
+      # Switch to Postgres inside compose
+      DATABASE_URL: postgresql+psycopg2://smartbot:smartbot@db:5432/smartbot
+      BACKEND_CORS_ORIGINS: '["http://localhost:8080","http://127.0.0.1:8080","http://localhost:8081","http://127.0.0.1:8081"]'
+      JWT_SECRET: change_me_compose
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # LLM provider config (locked to OpenRouter DeepSeek v3 unless overridden locally)
+      LLM_PROVIDER: ${LLM_PROVIDER:-openrouter}
+      LLM_MODEL: ${LLM_MODEL:-deepseek/deepseek-v3}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      API_PREFIX: /api/v1
+      UPLOAD_DIR: /data/uploads
+      # Suppress noisy gRPC warnings from Google client libs
+      GRPC_VERBOSITY: NONE
+      GRPC_LOG_SEVERITY: ERROR
+    volumes:
+      - backend-uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8001:8000"  # change host port to avoid conflicts
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  seed:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg2://smartbot:smartbot@db:5432/smartbot
+      API_PREFIX: /api/v1
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - backend-uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    entrypoint: ["python", "scripts/seed_admins_vacancies.py"]
+    restart: "no"
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE: http://localhost:8001/api/v1
+    environment:
+      - VITE_API_BASE=http://localhost:8001/api/v1
+    ports:
+      - "8081:80"
+    depends_on:
+      - backend
+
+volumes:
+  db-data:
+  backend-uploads:
